@@ -1,0 +1,23 @@
+aiohappyeyeballs==2.6.1
+aiohttp==3.12.14
+aiosignal==1.4.0
+altgraph @ file:///AppleInternal/Library/BuildRoots/39d9dc1a-2111-11f0-be06-226177e5bb69/Library/Caches/com.apple.xbs/Sources/python3/altgraph-0.17.2-py2.py3-none-any.whl
+async-timeout==5.0.1
+attrs==25.3.0
+discord.py==2.5.2
+distlib==0.3.9
+filelock==3.16.1
+frozenlist==1.7.0
+future @ file:///AppleInternal/Library/BuildRoots/39d9dc1a-2111-11f0-be06-226177e5bb69/Library/Caches/com.apple.xbs/Sources/python3/future-0.18.2-py3-none-any.whl
+idna==3.10
+macholib @ file:///AppleInternal/Library/BuildRoots/39d9dc1a-2111-11f0-be06-226177e5bb69/Library/Caches/com.apple.xbs/Sources/python3/macholib-1.15.2-py2.py3-none-any.whl
+multidict==6.6.3
+platformdirs==4.3.6
+propcache==0.3.2
+psycopg==3.2.9
+psycopg-binary==3.2.9
+python-dotenv==1.1.1
+six @ file:///AppleInternal/Library/BuildRoots/39d9dc1a-2111-11f0-be06-226177e5bb69/Library/Caches/com.apple.xbs/Sources/python3/six-1.15.0-py2.py3-none-any.whl
+typing_extensions==4.14.1
+virtualenv==20.27.0
+yarl==1.20.1
