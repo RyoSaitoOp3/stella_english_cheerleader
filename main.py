@@ -43,7 +43,7 @@ def update_streak(conn, user_id, today_date):
 
 # --- Reminder Task ---
 JST = zoneinfo.ZoneInfo("Asia/Tokyo")
-reminder_time = datetime.time(hour=22, minute=0, tzinfo=JST)
+reminder_time = datetime.time(hour=23, minute=30, tzinfo=JST)
 
 @tasks.loop(time=reminder_time)
 async def check_for_reminders():
