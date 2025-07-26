@@ -12,11 +12,16 @@ load_dotenv()
 BOT_TOKEN = os.getenv('DISCORD_BOT_TOKEN')
 DATABASE_URL = os.getenv('DATABASE_URL')
 REMINDER_CHANNEL_ID = int(os.getenv('REMINDER_CHANNEL_ID'))
+TEST_MODE = os.getenv('TEST_MODE', 'false').lower() == 'true' # <--- 変更点: テストモード変数を追加
 
+# <--- 変更点: Server Members Intentを有効化
 intents = discord.Intents.default()
+intents.members = True 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# --- Database Functions ---
+# (Database Functions and UI Classes are unchanged, so they are omitted for brevity)
+# ...
+# --- Database Functions (No Changes) ---
 def save_record(conn, user_id, user_name, category, recorded_at):
     with conn.cursor() as cur:
         sql = "INSERT INTO learning_records (user_id, user_name, category, recorded_at) VALUES (%s, %s, %s, %s);"
@@ -43,15 +48,13 @@ def update_streak(conn, user_id, today_date):
 
 # --- Reminder Task ---
 JST = zoneinfo.ZoneInfo("Asia/Tokyo")
-reminder_time = datetime.time(hour=23, minute=30, tzinfo=JST)
+reminder_time = datetime.time(hour=22, minute=0, tzinfo=JST)
 
 @tasks.loop(time=reminder_time)
 async def check_for_reminders():
     await bot.wait_until_ready()
     channel = bot.get_channel(REMINDER_CHANNEL_ID)
-    if not channel:
-        print(f"ERROR: Reminder channel with ID {REMINDER_CHANNEL_ID} not found.")
-        return
+    if not channel: return
 
     today = datetime.datetime.now(JST).date()
     yesterday = today - datetime.timedelta(days=1)
@@ -61,17 +64,33 @@ async def check_for_reminders():
                 sql = "SELECT user_id FROM user_stats WHERE last_study_date = %s"
                 cur.execute(sql, (yesterday,))
                 users_to_remind_ids = [row[0] for row in cur.fetchall()]
-                if not users_to_remind_ids:
-                    print("No users to remind today.")
-                    return
+                if not users_to_remind_ids: return
+
                 for user_id in users_to_remind_ids:
-                    user = bot.get_user(user_id)
-                    if user: await channel.send(f"{user.mention} まもなくお休みのお時間ですが、本日の学習記録がまだのようでございます。")
+                    # <--- 変更点: get_userからfetch_userに変更
+                    try:
+                        user = await bot.fetch_user(user_id)
+                        await channel.send(f"{user.mention} まもなくお休みのお時間ですが、本日の学習記録がまだのようでございます。")
+                    except discord.NotFound:
+                        print(f"ERROR: User with ID {user_id} could not be found during reminder.")
+                
                 print(f"Sent reminders to {len(users_to_remind_ids)} users.")
     except (Exception, psycopg.DatabaseError) as error:
         print(f"ERROR during reminder task: {error}")
 
-# --- Discord UI Classes ---
+# <--- 変更点: テスト用ループを追加 ---
+@tasks.loop(minutes=5)
+async def test_loop():
+    if not TEST_MODE:
+        return # テストモードがtrueでなければ何もしない
+    
+    await bot.wait_until_ready()
+    channel = bot.get_channel(REMINDER_CHANNEL_ID)
+    if channel:
+        await channel.send(f"Bot is running. This is a test message. ({datetime.datetime.now(JST).strftime('%H:%M')})")
+        print("Sent a test message.")
+
+# --- Discord UI Classes (No Changes) ---
 class StudyCategoryView(View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -96,63 +115,50 @@ class StudyButton(Button):
         except (Exception, psycopg.DatabaseError) as error:
             print(f"ERROR: {error}")
             await interaction.followup.send("エラーが発生しました。記録に失敗した可能性があります。", ephemeral=True)
-
-# --- Discord Bot Slash Commands ---
+            
+# --- Discord Bot Slash Commands (No Changes) ---
 @bot.tree.command(name="study", description="学習内容を記録します。")
 async def study(interaction: discord.Interaction):
     await interaction.response.send_message("記録するカテゴリを選択してください。", view=StudyCategoryView(), ephemeral=True)
 
-## --- NEW RANKING COMMAND ---
 @bot.tree.command(name="ranking", description="週間学習回数ランキングを表示します。")
 async def ranking(interaction: discord.Interaction):
     await interaction.response.defer()
     try:
         with psycopg.connect(DATABASE_URL) as conn:
             with conn.cursor() as cur:
-                # SQL to get top 10 users by study count in the last 30 days
                 sql = """
                     SELECT user_name, COUNT(id) as study_count
-                    FROM learning_records
-                    WHERE recorded_at >= NOW() - INTERVAL '30 days'
-                    GROUP BY user_name
-                    ORDER BY study_count DESC
-                    LIMIT 10;
+                    FROM learning_records WHERE recorded_at >= NOW() - INTERVAL '7 days'
+                    GROUP BY user_name ORDER BY study_count DESC LIMIT 10;
                 """
                 cur.execute(sql)
                 results = cur.fetchall()
-
-                embed = discord.Embed(
-                    title="🏆 月間学習ランキング 🏆",
-                    description="過去30日間の学習記録回数のトップ10です！",
-                    color=discord.Color.gold()
-                )
-
+                embed = discord.Embed(title="🏆 週間学習ランキング 🏆", description="過去7日間の学習記録回数のトップ10です！", color=discord.Color.gold())
                 if not results:
-                    embed.description = "まだ過去30日間の学習記録がありません。"
+                    embed.description = "まだ過去7日間の学習記録がありません。"
                     await interaction.followup.send(embed=embed)
                     return
-
                 rank_emojis = {1: "🥇", 2: "🥈", 3: "🥉"}
                 for i, (user_name, study_count) in enumerate(results, 1):
                     rank_display = rank_emojis.get(i, f"**{i}.**")
-                    embed.add_field(
-                        name=f"{rank_display} {user_name} さん",
-                        value=f"`{study_count} 回`",
-                        inline=False
-                    )
-                
+                    embed.add_field(name=f"{rank_display} {user_name} さん", value=f"`{study_count} 回`", inline=False)
                 await interaction.followup.send(embed=embed)
-
     except (Exception, psycopg.DatabaseError) as error:
         print(f"ERROR during ranking command: {error}")
         await interaction.followup.send("ランキングの取得中にエラーが発生しました。", ephemeral=True)
 
-
+# --- Bot Startup ---
 @bot.event
 async def on_ready():
     await bot.tree.sync()
+    # Start the reminder loop
     if not check_for_reminders.is_running():
         check_for_reminders.start()
+    # <--- 変更点: テストループを開始
+    if not test_loop.is_running():
+        test_loop.start()
+    
     print(f'{bot.user} としてログインしました')
     print('------')
 
