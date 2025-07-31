@@ -104,7 +104,7 @@ class StudyButton(Button):
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
         user_id, user_name, button_label = interaction.user.id, interaction.user.name, self.label
-        current_time, today_date = datetime.datetime.now(datetime.timezone.utc), datetime.datetime.now(datetime.timezone.utc).date()
+        current_time, today_date = datetime.datetime.now(JST), datetime.datetime.now(JST).date()
         try:
             with psycopg.connect(DATABASE_URL) as conn:
                 save_record(conn, user_id, user_name, button_label, current_time)
