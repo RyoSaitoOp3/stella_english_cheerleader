@@ -49,35 +49,43 @@ def update_streak(conn, user_id, study_date):
         if result:
             last_streak, last_study_date = result
             days_diff = (study_date - last_study_date).days
-            if days_diff == 1:
-                new_streak = last_streak + 1
-            elif days_diff == 0:
-                new_streak = last_streak
+            if days_diff == 1: new_streak = last_streak + 1
+            elif days_diff == 0: new_streak = last_streak
         
         upsert_sql = """
-            INSERT INTO user_stats (user_id, current_streak, last_study_date)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (user_id) DO UPDATE
-            SET current_streak = EXCLUDED.current_streak,
-                last_study_date = EXCLUDED.last_study_date;
+            INSERT INTO user_stats (user_id, current_streak, last_study_date) VALUES (%s, %s, %s)
+            ON CONFLICT (user_id) DO UPDATE SET current_streak = EXCLUDED.current_streak, last_study_date = EXCLUDED.last_study_date;
         """
         cur.execute(upsert_sql, (user_id, new_streak, study_date))
         print(f"SUCCESS: Updated streak for user {user_id} to {new_streak}.")
         return new_streak
 
+# <--- 変更点: Riga Coinを付与する関数を追加 ---
+def add_riga_coins(conn, user_id, amount_to_add):
+    """Adds Riga Coins to a user's balance and returns the new total."""
+    with conn.cursor() as cur:
+        sql = """
+            UPDATE user_stats
+            SET riga_coin_balance = riga_coin_balance + %s
+            WHERE user_id = %s
+            RETURNING riga_coin_balance;
+        """
+        cur.execute(sql, (amount_to_add, user_id))
+        new_balance = cur.fetchone()[0]
+        print(f"SUCCESS: Awarded {amount_to_add} Riga to user {user_id}. New balance: {new_balance}")
+        return new_balance
+
 # --- Reminder Task ---
 reminder_time = datetime.time(hour=22, minute=0, tzinfo=JST)
-
 @tasks.loop(time=reminder_time)
 async def check_for_reminders():
+    # ... (このセクションは変更なし)
     await bot.wait_until_ready()
     channel = bot.get_channel(REMINDER_CHANNEL_ID)
     if not channel: return
-
     current_time_jst = datetime.datetime.now(JST)
     current_study_date = get_study_date(current_time_jst)
     previous_study_day = current_study_date - datetime.timedelta(days=1)
-
     try:
         with psycopg.connect(DATABASE_URL) as conn:
             with conn.cursor() as cur:
@@ -85,14 +93,12 @@ async def check_for_reminders():
                 cur.execute(sql, (previous_study_day,))
                 users_to_remind_ids = [row[0] for row in cur.fetchall()]
                 if not users_to_remind_ids: return
-
                 for user_id in users_to_remind_ids:
                     try:
                         user = await bot.fetch_user(user_id)
                         await channel.send(f"{user.mention} まもなくお休みのお時間ですが、本日の学習記録がまだのようでございます。")
                     except discord.NotFound:
                         print(f"ERROR: User with ID {user_id} could not be found during reminder.")
-                
                 print(f"Sent reminders to {len(users_to_remind_ids)} users.")
     except (Exception, psycopg.DatabaseError) as error:
         print(f"ERROR during reminder task: {error}")
@@ -100,6 +106,7 @@ async def check_for_reminders():
 # --- Test Loop ---
 @tasks.loop(minutes=5)
 async def test_loop():
+    # ... (このセクションは変更なし)
     if not TEST_MODE: return
     await bot.wait_until_ready()
     channel = bot.get_channel(REMINDER_CHANNEL_ID)
@@ -111,7 +118,6 @@ async def test_loop():
 class StudyCategoryView(View):
     def __init__(self):
         super().__init__(timeout=None)
-        # <--- 変更点: 「オンライン英会話」を追加 ---
         categories = ["単語帳", "教科書", "シャドウイング", "動画視聴", "学習アプリ", "オンライン英会話"]
         for category in categories: self.add_item(StudyButton(label=category))
 
@@ -131,9 +137,26 @@ class StudyButton(Button):
             with psycopg.connect(DATABASE_URL) as conn:
                 save_record(conn, user_id, user_name, button_label, current_time_utc)
                 new_streak = update_streak(conn, user_id, study_date)
-            message = f"{interaction.user.mention} さんが **{button_label}** の学習を記録しました。お見事です！"
-            if new_streak > 1: message += f"\n\n**🔥 これで{new_streak}日連続です！**"
+
+                # <--- 変更点: Riga Coinの付与ロジックとメッセージ作成 ---
+                riga_awarded = 0
+                new_balance = 0
+                
+                if new_streak >= 7:
+                    riga_to_add = new_streak - 6
+                    new_balance = add_riga_coins(conn, user_id, riga_to_add)
+                    riga_awarded = riga_to_add
+
+                # メッセージの組み立て
+                message = f"{interaction.user.mention} さんが **{button_label}** の学習を記録しました。お見事です！"
+                if new_streak > 1:
+                    message += f"\n\n**🔥 これで{new_streak}日連続です！**"
+                
+                if riga_awarded > 0:
+                    message += f"\n**{riga_awarded} Riga** を新たに獲得し、合計保有額は **{new_balance} Riga** となりました。"
+                
             await interaction.followup.send(message)
+
         except (Exception, psycopg.DatabaseError) as error:
             print(f"ERROR: {error}")
             await interaction.followup.send("エラーが発生しました。記録に失敗した可能性があります。", ephemeral=True)
@@ -141,15 +164,16 @@ class StudyButton(Button):
 # --- Discord Bot Slash Commands ---
 @bot.tree.command(name="study", description="学習内容を記録します。")
 async def study(interaction: discord.Interaction):
+    # ... (このセクションは変更なし)
     await interaction.response.send_message("記録するカテゴリを選択してください。", view=StudyCategoryView(), ephemeral=True)
 
 @bot.tree.command(name="ranking", description="学習回数ランキングを表示します。")
 async def ranking(interaction: discord.Interaction):
+    # ... (このセクションは変更なし)
     await interaction.response.defer()
     try:
         with psycopg.connect(DATABASE_URL) as conn:
             with conn.cursor() as cur:
-                # <--- 変更点: ランキング集計期間を7日に修正 ---
                 sql = """
                     SELECT user_name, COUNT(id) as study_count
                     FROM learning_records WHERE recorded_at >= NOW() - INTERVAL '7 days'
@@ -157,7 +181,6 @@ async def ranking(interaction: discord.Interaction):
                 """
                 cur.execute(sql)
                 results = cur.fetchall()
-                # <--- 変更点: ランキングのタイトルと説明を「週間」に修正 ---
                 embed = discord.Embed(title="🏆 週間学習ランキング 🏆", description="過去7日間の学習記録回数のトップ10です！", color=discord.Color.gold())
                 if not results:
                     embed.description = "まだ過去7日間の学習記録がありません。"
@@ -175,6 +198,7 @@ async def ranking(interaction: discord.Interaction):
 # --- Bot Startup ---
 @bot.event
 async def on_ready():
+    # ... (このセクションは変更なし)
     await bot.tree.sync()
     if not check_for_reminders.is_running(): check_for_reminders.start()
     if not test_loop.is_running(): test_loop.start()
