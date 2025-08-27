@@ -134,45 +134,39 @@ class StudyButton(Button):
 
         try:
             with psycopg.connect(DATABASE_URL) as conn:
-                # --- 変更点: Riga Coinロジックのために、まず前回の学習日を取得 ---
                 with conn.cursor() as cur:
                     cur.execute("SELECT last_study_date FROM user_stats WHERE user_id = %s", (user_id,))
                     result = cur.fetchone()
-                    if not result:
-                        is_first_record_of_day = True # ユーザーの初回記録
-                    else:
-                        last_study_date = result[0]
-                        if (study_date - last_study_date).days >= 1:
-                            is_first_record_of_day = True # 日付が変わって最初の記録
+                    if not result or (study_date - result[0]).days >= 1:
+                        is_first_record_of_day = True
 
-                # 通常通り、学習記録とストリーク更新を行う
                 save_record(conn, user_id, user_name, button_label, current_time_utc)
                 new_streak = update_streak(conn, user_id, study_date)
 
-                # --- 変更点: Riga Coinの付与ロジックを修正 ---
                 riga_awarded = 0
                 new_balance = 0
-                riga_message_addon = "" # 追加メッセージ用の変数
+                riga_message_addon = ""
                 
                 if new_streak >= 7:
                     if is_first_record_of_day:
-                        riga_to_add = new_streak - 6
+                        # <--- 変更点: 獲得Rigaの上限を50に設定 ---
+                        potential_riga = new_streak - 6
+                        riga_to_add = min(potential_riga, 50) 
                         new_balance = add_riga_coins(conn, user_id, riga_to_add)
                         riga_awarded = riga_to_add
-                    else: # 同日2回目以降の記録
+                    else:
                         riga_to_add = 1
                         new_balance = add_riga_coins(conn, user_id, riga_to_add)
                         riga_awarded = riga_to_add
                         riga_message_addon = "\n本日2回目以降の記録のため、獲得 Riga は **1 Riga** となりました。"
 
-                # メッセージの組み立て
                 message = f"{interaction.user.mention} さんが **{button_label}** の学習を記録しました。お見事です！"
                 if new_streak > 1:
                     message += f"\n\n**🔥 これで{new_streak}日連続です！**"
                 
                 if riga_awarded > 0:
                     message += f"\n**{riga_awarded} Riga** を新たに獲得し、合計保有額は **{new_balance} Riga** となりました。"
-                    message += riga_message_addon # 追加メッセージを結合
+                    message += riga_message_addon
                 
             await interaction.followup.send(message)
 
