@@ -60,7 +60,6 @@ def update_streak(conn, user_id, study_date):
         print(f"SUCCESS: Updated streak for user {user_id} to {new_streak}.")
         return new_streak
 
-# <--- 変更点: Riga Coinを付与する関数を追加 ---
 def add_riga_coins(conn, user_id, amount_to_add):
     """Adds Riga Coins to a user's balance and returns the new total."""
     with conn.cursor() as cur:
@@ -79,7 +78,6 @@ def add_riga_coins(conn, user_id, amount_to_add):
 reminder_time = datetime.time(hour=22, minute=0, tzinfo=JST)
 @tasks.loop(time=reminder_time)
 async def check_for_reminders():
-    # ... (このセクションは変更なし)
     await bot.wait_until_ready()
     channel = bot.get_channel(REMINDER_CHANNEL_ID)
     if not channel: return
@@ -106,7 +104,6 @@ async def check_for_reminders():
 # --- Test Loop ---
 @tasks.loop(minutes=5)
 async def test_loop():
-    # ... (このセクションは変更なし)
     if not TEST_MODE: return
     await bot.wait_until_ready()
     channel = bot.get_channel(REMINDER_CHANNEL_ID)
@@ -132,20 +129,41 @@ class StudyButton(Button):
         current_time_utc = datetime.datetime.now(datetime.timezone.utc)
         current_time_jst = current_time_utc.astimezone(JST)
         study_date = get_study_date(current_time_jst)
+        
+        is_first_record_of_day = False
 
         try:
             with psycopg.connect(DATABASE_URL) as conn:
+                # --- 変更点: Riga Coinロジックのために、まず前回の学習日を取得 ---
+                with conn.cursor() as cur:
+                    cur.execute("SELECT last_study_date FROM user_stats WHERE user_id = %s", (user_id,))
+                    result = cur.fetchone()
+                    if not result:
+                        is_first_record_of_day = True # ユーザーの初回記録
+                    else:
+                        last_study_date = result[0]
+                        if (study_date - last_study_date).days >= 1:
+                            is_first_record_of_day = True # 日付が変わって最初の記録
+
+                # 通常通り、学習記録とストリーク更新を行う
                 save_record(conn, user_id, user_name, button_label, current_time_utc)
                 new_streak = update_streak(conn, user_id, study_date)
 
-                # <--- 変更点: Riga Coinの付与ロジックとメッセージ作成 ---
+                # --- 変更点: Riga Coinの付与ロジックを修正 ---
                 riga_awarded = 0
                 new_balance = 0
+                riga_message_addon = "" # 追加メッセージ用の変数
                 
                 if new_streak >= 7:
-                    riga_to_add = new_streak - 6
-                    new_balance = add_riga_coins(conn, user_id, riga_to_add)
-                    riga_awarded = riga_to_add
+                    if is_first_record_of_day:
+                        riga_to_add = new_streak - 6
+                        new_balance = add_riga_coins(conn, user_id, riga_to_add)
+                        riga_awarded = riga_to_add
+                    else: # 同日2回目以降の記録
+                        riga_to_add = 1
+                        new_balance = add_riga_coins(conn, user_id, riga_to_add)
+                        riga_awarded = riga_to_add
+                        riga_message_addon = "\n本日2回目以降の記録のため、獲得 Riga は **1 Riga** となりました。"
 
                 # メッセージの組み立て
                 message = f"{interaction.user.mention} さんが **{button_label}** の学習を記録しました。お見事です！"
@@ -154,6 +172,7 @@ class StudyButton(Button):
                 
                 if riga_awarded > 0:
                     message += f"\n**{riga_awarded} Riga** を新たに獲得し、合計保有額は **{new_balance} Riga** となりました。"
+                    message += riga_message_addon # 追加メッセージを結合
                 
             await interaction.followup.send(message)
 
@@ -164,12 +183,10 @@ class StudyButton(Button):
 # --- Discord Bot Slash Commands ---
 @bot.tree.command(name="study", description="学習内容を記録します。")
 async def study(interaction: discord.Interaction):
-    # ... (このセクションは変更なし)
     await interaction.response.send_message("記録するカテゴリを選択してください。", view=StudyCategoryView(), ephemeral=True)
 
 @bot.tree.command(name="ranking", description="学習回数ランキングを表示します。")
 async def ranking(interaction: discord.Interaction):
-    # ... (このセクションは変更なし)
     await interaction.response.defer()
     try:
         with psycopg.connect(DATABASE_URL) as conn:
@@ -198,7 +215,6 @@ async def ranking(interaction: discord.Interaction):
 # --- Bot Startup ---
 @bot.event
 async def on_ready():
-    # ... (このセクションは変更なし)
     await bot.tree.sync()
     if not check_for_reminders.is_running(): check_for_reminders.start()
     if not test_loop.is_running(): test_loop.start()
