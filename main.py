@@ -78,6 +78,7 @@ def add_riga_coins(conn, user_id, amount_to_add):
 reminder_time = datetime.time(hour=22, minute=0, tzinfo=JST)
 @tasks.loop(time=reminder_time)
 async def check_for_reminders():
+    # ... (このセクションは変更なし)
     await bot.wait_until_ready()
     channel = bot.get_channel(REMINDER_CHANNEL_ID)
     if not channel: return
@@ -104,6 +105,7 @@ async def check_for_reminders():
 # --- Test Loop ---
 @tasks.loop(minutes=5)
 async def test_loop():
+    # ... (このセクションは変更なし)
     if not TEST_MODE: return
     await bot.wait_until_ready()
     channel = bot.get_channel(REMINDER_CHANNEL_ID)
@@ -149,7 +151,6 @@ class StudyButton(Button):
                 
                 if new_streak >= 7:
                     if is_first_record_of_day:
-                        # <--- 変更点: 獲得Rigaの上限を50に設定 ---
                         potential_riga = new_streak - 6
                         riga_to_add = min(potential_riga, 50) 
                         new_balance = add_riga_coins(conn, user_id, riga_to_add)
@@ -181,6 +182,7 @@ async def study(interaction: discord.Interaction):
 
 @bot.tree.command(name="ranking", description="学習回数ランキングを表示します。")
 async def ranking(interaction: discord.Interaction):
+    # ... (このセクションは変更なし)
     await interaction.response.defer()
     try:
         with psycopg.connect(DATABASE_URL) as conn:
@@ -206,6 +208,98 @@ async def ranking(interaction: discord.Interaction):
         print(f"ERROR during ranking command: {error}")
         await interaction.followup.send("ランキングの取得中にエラーが発生しました。", ephemeral=True)
 
+# <--- 変更点: /balanceコマンドを追加 ---
+@bot.tree.command(name="balance", description="Riga Coinの保有残高ランキングを表示します。")
+async def balance(interaction: discord.Interaction):
+    await interaction.response.defer()
+    try:
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                sql = """
+                    SELECT user_id, riga_coin_balance
+                    FROM user_stats
+                    WHERE riga_coin_balance > 0
+                    ORDER BY riga_coin_balance DESC;
+                """
+                cur.execute(sql)
+                results = cur.fetchall()
+
+                embed = discord.Embed(
+                    title="💰 Riga Coin 保有残高 💰",
+                    color=discord.Color.yellow()
+                )
+
+                if not results:
+                    embed.description = "まだ誰もRiga Coinを保有していません。"
+                    await interaction.followup.send(embed=embed)
+                    return
+
+                description_text = ""
+                for i, (user_id, coin_balance) in enumerate(results, 1):
+                    try:
+                        user = await bot.fetch_user(user_id)
+                        description_text += f"**{i}.** {user.mention} : **{coin_balance}** Riga\n"
+                    except discord.NotFound:
+                        # ユーザーが見つからない場合はスキップ
+                        continue
+                
+                embed.description = description_text
+                await interaction.followup.send(embed=embed)
+
+    except (Exception, psycopg.DatabaseError) as error:
+        print(f"ERROR during balance command: {error}")
+        await interaction.followup.send("残高の取得中にエラーが発生しました。", ephemeral=True)
+
+# <--- 変更点: /sendコマンドを追加 ---
+@bot.tree.command(name="send", description="他のユーザーにRiga Coinを送信します。")
+@discord.app_commands.describe(
+    recipient="送信先のユーザー",
+    amount="送信するRigaの額"
+)
+async def send(interaction: discord.Interaction, recipient: discord.Member, amount: int):
+    sender_id = interaction.user.id
+    recipient_id = recipient.id
+
+    if sender_id == recipient_id:
+        await interaction.response.send_message("自分自身にRiga Coinを送信することはできません。", ephemeral=True)
+        return
+    if amount <= 0:
+        await interaction.response.send_message("1以上の値を指定してください。", ephemeral=True)
+        return
+
+    await interaction.response.defer()
+
+    try:
+        with psycopg.connect(DATABASE_URL) as conn:
+            # トランザクション内で処理を実行
+            with conn.transaction():
+                with conn.cursor() as cur:
+                    # 1. 送信者の残高を確認
+                    cur.execute("SELECT riga_coin_balance FROM user_stats WHERE user_id = %s", (sender_id,))
+                    sender_balance = cur.fetchone()
+                    if not sender_balance or sender_balance[0] < amount:
+                        await interaction.followup.send("Riga Coinの残高が不足しています。", ephemeral=True)
+                        return # ここで処理を中断するとトランザクションは自動的にロールバックされる
+
+                    # 2. 送信者の残高を減らす
+                    cur.execute("UPDATE user_stats SET riga_coin_balance = riga_coin_balance - %s WHERE user_id = %s", (amount, sender_id))
+
+                    # 3. 受信者の残高を増やす（存在しない場合は新しい記録を作成）
+                    upsert_sql = """
+                        INSERT INTO user_stats (user_id, current_streak, last_study_date, riga_coin_balance)
+                        VALUES (%s, 0, '1970-01-01', %s)
+                        ON CONFLICT (user_id) DO UPDATE
+                        SET riga_coin_balance = user_stats.riga_coin_balance + %s;
+                    """
+                    cur.execute(upsert_sql, (recipient_id, amount, amount))
+
+        # トランザクションが成功した場合のみ、このメッセージが送信される
+        await interaction.followup.send(f"{interaction.user.mention} さんから {recipient.mention} さんへ **{amount} Riga** が送信されました。")
+
+    except (Exception, psycopg.DatabaseError) as error:
+        print(f"ERROR during send command: {error}")
+        await interaction.followup.send("送信処理中にエラーが発生しました。", ephemeral=True)
+
 # --- Bot Startup ---
 @bot.event
 async def on_ready():
@@ -217,3 +311,4 @@ async def on_ready():
     print('------')
 
 bot.run(BOT_TOKEN)
+
